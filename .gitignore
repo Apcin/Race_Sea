@@ -215,3 +215,4 @@ fuzz-models/
 runs/
 train_data_sea/
 *.pt
+*.zip

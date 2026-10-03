@@ -49,6 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="0")
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--save-images", type=int, default=0, help="Save the first N annotated images beside --output")
     parser.add_argument(
         "--end2end",
         type=parse_bool,
@@ -78,7 +79,7 @@ def main() -> None:
 
     predictions_by_image: dict[str, list[dict]] = {}
     results = model.predict(
-        source=[str(path) for path in image_paths],
+        source=str(args.source / "*.jpg"),
         imgsz=args.imgsz,
         conf=args.conf,
         iou=args.iou,
@@ -89,6 +90,7 @@ def main() -> None:
         stream=True,
         verbose=False,
     )
+    saved_image_count = 0
     for result in results:
         image_name = Path(result.path).name
         if image_name in predictions_by_image:
@@ -97,24 +99,26 @@ def main() -> None:
         obb = result.obb
         if obb is None:
             raise RuntimeError(f"model did not return OBB predictions for {image_name}")
-        height, width = result.orig_shape
         for points, class_id, score in zip(obb.xyxyxyxy.cpu(), obb.cls.cpu(), obb.conf.cpu()):
-            clipped_points = [
+            rounded_points = [
                 [
-                    round(min(max(float(point[0]), 0.0), float(width)), args.decimals),
-                    round(min(max(float(point[1]), 0.0), float(height)), args.decimals),
+                    round(float(point[0]), args.decimals),
+                    round(float(point[1]), args.decimals),
                 ]
                 for point in points
             ]
             predictions.append(
                 {
                     "category": model.names[int(class_id)],
-                    "points": clipped_points,
+                    "points": rounded_points,
                     "score": round(float(score), 6),
                 }
             )
         predictions.sort(key=lambda item: item["score"], reverse=True)
         predictions_by_image[image_name] = predictions
+        if saved_image_count < args.save_images:
+            result.save(filename=args.output.parent / image_name)
+            saved_image_count += 1
 
     expected_names = {path.name for path in image_paths}
     missing = sorted(expected_names - predictions_by_image.keys())
@@ -128,7 +132,10 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(submission, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     detection_count = sum(len(item["predictions"]) for item in submission)
-    print(f"Wrote {len(submission)} images and {detection_count} detections to {args.output}")
+    print(
+        f"Wrote {len(submission)} images and {detection_count} detections to {args.output}; "
+        f"saved {saved_image_count} annotated images to {args.output.parent}"
+    )
 
 
 if __name__ == "__main__":

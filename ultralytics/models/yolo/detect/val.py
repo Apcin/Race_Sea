@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,15 @@ RACE_GROUPS = {
 RACE_VEHICLE_CLASS = 24
 RACE_VEHICLE_IOU = 0.35
 RACE_DEFAULT_IOU = 0.50
+
+
+def _right_align_display(text: str, width: int) -> str:
+    """Right-align text by terminal columns, accounting for double-width CJK characters."""
+    text = str(text)
+    display_width = sum(
+        0 if unicodedata.combining(c) else 2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text
+    )
+    return " " * max(0, width - display_width) + text
 
 
 def init_race_stats(nc: int) -> dict[str, np.ndarray]:
@@ -64,6 +74,7 @@ def race_match_stats(
     vehicle_cls: int = RACE_VEHICLE_CLASS,
     vehicle_iou: float = RACE_VEHICLE_IOU,
     default_iou: float = RACE_DEFAULT_IOU,
+    ious: torch.Tensor | None = None,
 ) -> dict[str, np.ndarray]:
     """Count competition TP/FP/FN with class-exact, confidence-ordered one-to-one matching."""
     stats = init_race_stats(nc)
@@ -73,7 +84,7 @@ def race_match_stats(
         stats["gt"][cls] += 1
 
     if nl == 0:
-        for cls in detections[:, 5].int().tolist() if nd else []:
+        for cls in detections[:, -1].int().tolist() if nd else []:
             stats["fp"][cls] += 1
             stats["fp_background_or_iou"][cls] += 1
         return stats
@@ -82,8 +93,9 @@ def race_match_stats(
             stats["fn"][cls] += 1
         return stats
 
-    order = detections[:, 4].argsort(descending=True)
-    ious = box_iou(labels[:, 1:], detections[:, :4])
+    order = detections[:, -2].argsort(descending=True)
+    if ious is None:
+        ious = box_iou(labels[:, 1:], detections[:, :-2])
     matched = torch.zeros(nl, dtype=torch.bool, device=labels.device)
     thresholds = torch.where(
         labels[:, 0] == vehicle_cls,
@@ -92,7 +104,7 @@ def race_match_stats(
     )
 
     for di in order.tolist():
-        det_cls = int(detections[di, 5].item())
+        det_cls = int(detections[di, -1].item())
         same_cls = labels[:, 0] == det_cls
         candidates = torch.where(same_cls & ~matched & (ious[:, di] >= thresholds))[0]
         if candidates.numel():
@@ -409,19 +421,22 @@ class DetectionValidator(BaseValidator):
         if not len(box.p):
             return
 
-        pf = "%20s" + "%12.3g" * 7
-        header_pf = "%20s" + "%12s" * 7
+        pf = "%s" + "%12.3g" * 7
+        header_pf = "%s" + "%12s" * 7
         all_ap = box.all_ap
         map90 = all_ap[:, 8].mean() if len(all_ap) else 0.0
         LOGGER.info(
-            header_pf % ("Class", "P", "R", "f1", "mAP@0.5", "mAP@0.75", "mAP@.90", "mAP@.5:.95")
+            header_pf
+            % (_right_align_display("Class", 20), "P", "R", "f1", "mAP@0.5", "mAP@0.75", "mAP@.90", "mAP@.5:.95")
         )
-        LOGGER.info(pf % ("all", box.mp, box.mr, box.f1.mean(), box.map50, box.map75, map90, box.map))
+        LOGGER.info(
+            pf % (_right_align_display("all", 20), box.mp, box.mr, box.f1.mean(), box.map50, box.map75, map90, box.map)
+        )
         for i, c in enumerate(self.metrics.ap_class_index):
             LOGGER.info(
                 pf
                 % (
-                    self.names[c],
+                    _right_align_display(self.names[c], 20),
                     box.p[i],
                     box.r[i],
                     box.f1[i],
@@ -452,6 +467,10 @@ class DetectionValidator(BaseValidator):
         """Return True for the 25-class competition dataset layout."""
         names = self.names if isinstance(self.names, dict) else dict(enumerate(self.names))
         return self.nc == 25 and names.get(0) == "HM" and names.get(24) == "FSC"
+
+    def _race_groups(self) -> dict[str, range]:
+        """Return class groups used in competition summaries."""
+        return RACE_GROUPS
 
     def _update_race_metrics(self, pred: dict[str, torch.Tensor], batch: dict[str, Any]) -> None:
         """Accumulate competition metrics for one image."""
@@ -510,7 +529,7 @@ class DetectionValidator(BaseValidator):
         group_rows = []
         LOGGER.info("Race metrics by group:")
         LOGGER.info(("%12s" + "%10s" * 7) % ("Group", "TP", "FP", "FN", "GT", "Recall", "FDR", "Pred"))
-        for group, cls_ids in RACE_GROUPS.items():
+        for group, cls_ids in self._race_groups().items():
             cls_ids = [c for c in cls_ids if c < self.nc]
             tp_g = int(stats["tp"][cls_ids].sum()) if cls_ids else 0
             fp_g = int(stats["fp"][cls_ids].sum()) if cls_ids else 0
@@ -524,8 +543,21 @@ class DetectionValidator(BaseValidator):
         class_rows = []
         LOGGER.info("Race metrics by class:")
         LOGGER.info(
-            ("%4s %20s" + "%8s" * 10)
-            % ("ID", "Class", "TP", "FP", "FN", "GT", "Recall", "FDR", "Wrong", "Dup", "Bg/IoU", "Pred")
+            ("%4s %s" + "%8s" * 10)
+            % (
+                "ID",
+                _right_align_display("Class", 20),
+                "TP",
+                "FP",
+                "FN",
+                "GT",
+                "Recall",
+                "FDR",
+                "Wrong",
+                "Dup",
+                "Bg/IoU",
+                "Pred",
+            )
         )
         for c in range(self.nc):
             tp_c, fp_c, fn_c = (int(stats[k][c]) for k in ("tp", "fp", "fn"))
@@ -537,7 +569,8 @@ class DetectionValidator(BaseValidator):
             class_name = self.names.get(c, str(c)) if isinstance(self.names, dict) else self.names[c]
             row = (c, class_name, tp_c, fp_c, fn_c, int(gt_c), recall_c, fdr_c, wrong_c, dup_c, bg_iou_c, pred_c)
             class_rows.append(row)
-            LOGGER.info(("%4i %20s" + "%8i" * 4 + "%8.4f" * 2 + "%8i" * 4) % row)
+            display_row = (c, _right_align_display(class_name, 20), *row[2:])
+            LOGGER.info(("%4i %s" + "%8i" * 4 + "%8.4f" * 2 + "%8i" * 4) % display_row)
 
         with open(self.save_dir / "race_metrics.json", "w", encoding="utf-8") as f:
             json.dump(race_metrics, f, indent=2)

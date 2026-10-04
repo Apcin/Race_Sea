@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 from ultralytics.models.yolo.detect import DetectionValidator
+from ultralytics.models.yolo.detect.val import add_race_stats, race_match_stats
 from ultralytics.utils import LOGGER, ops
 from ultralytics.utils.metrics import OBBMetrics, batch_probiou
 from ultralytics.utils.nms import TorchNMS
@@ -93,6 +94,22 @@ class OBBValidator(DetectionValidator):
             return {"tp": np.zeros((preds["cls"].shape[0], self.niou), dtype=bool)}
         iou = batch_probiou(batch["bboxes"], preds["bboxes"])
         return {"tp": self.match_predictions(preds["cls"], batch["cls"], iou).cpu().numpy()}
+
+    def _is_race_dataset(self) -> bool:
+        """Return True for the 9-class sea-race dataset layout."""
+        names = self.names if isinstance(self.names, dict) else dict(enumerate(self.names))
+        return self.nc == 9 and names.get(0) == "集装箱船" and names.get(8) == "保障船"
+
+    def _race_groups(self) -> dict[str, range]:
+        """Return the aggregate class group for the sea-race dataset."""
+        return {"ship": range(self.nc)}
+
+    def _update_race_metrics(self, pred: dict[str, torch.Tensor], batch: dict[str, Any]) -> None:
+        """Accumulate competition metrics for one image using probabilistic OBB IoU."""
+        labels = torch.cat((batch["cls"].view(-1, 1), batch["bboxes"]), 1)
+        detections = torch.cat((pred["bboxes"], pred["conf"].view(-1, 1), pred["cls"].view(-1, 1)), 1)
+        ious = batch_probiou(batch["bboxes"], pred["bboxes"]) if len(labels) and len(detections) else None
+        add_race_stats(self.race_stats, race_match_stats(detections, labels, self.nc, ious=ious))
 
     def postprocess(self, preds: torch.Tensor) -> list[dict[str, torch.Tensor]]:
         """Postprocess OBB predictions.

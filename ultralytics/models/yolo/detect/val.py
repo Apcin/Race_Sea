@@ -310,7 +310,12 @@ class DetectionValidator(BaseValidator):
             )
             # Evaluate
             if self.args.plots:
-                self.confusion_matrix.process_batch(predn, pbatch, conf=self.confusion_matrix_conf)
+                self.confusion_matrix.process_batch(
+                    predn,
+                    pbatch,
+                    conf=self.confusion_matrix_conf,
+                    iou_thres=RACE_DEFAULT_IOU if self.race_enabled else 0.45,
+                )
                 if self.args.visualize:
                     self.confusion_matrix.plot_matches(
                         batch["img"][si],

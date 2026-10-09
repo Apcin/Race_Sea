@@ -49,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="0")
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--workers", type=int, default=8)
-    parser.add_argument("--save-images", type=int, default=0, help="Save the first N annotated images beside --output")
+    parser.add_argument("--save-images", type=int, default=0, help="Save the first N annotated images containing fishing vessels")
     parser.add_argument(
         "--end2end",
         type=parse_bool,
@@ -116,7 +116,7 @@ def main() -> None:
             )
         predictions.sort(key=lambda item: item["score"], reverse=True)
         predictions_by_image[image_name] = predictions
-        if saved_image_count < args.save_images:
+        if saved_image_count < args.save_images and any(item["category"] == "渔船" for item in predictions):
             result.save(filename=args.output.parent / image_name)
             saved_image_count += 1
 

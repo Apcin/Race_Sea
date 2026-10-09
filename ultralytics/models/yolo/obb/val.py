@@ -70,6 +70,10 @@ class OBBValidator(DetectionValidator):
         val = self.data.get(self.args.split, "")  # validation path
         self.is_dota = isinstance(val, str) and "DOTA" in val  # check if dataset is DOTA format
         self.confusion_matrix.task = "obb"  # set confusion matrix task to 'obb'
+        self.miss_visualization_count = 0
+        self.miss_visualization_classes = [i for i, name in self.names.items() if name in {"渔船", "杂货船"}]
+        if not self.training and self.race_enabled and self.args.plots:
+            self.confusion_matrix.matches = {}
 
     def _process_batch(self, preds: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> dict[str, np.ndarray]:
         """Compute the correct prediction matrix for a batch of detections and ground truth bounding boxes.
@@ -109,7 +113,17 @@ class OBBValidator(DetectionValidator):
         labels = torch.cat((batch["cls"].view(-1, 1), batch["bboxes"]), 1)
         detections = torch.cat((pred["bboxes"], pred["conf"].view(-1, 1), pred["cls"].view(-1, 1)), 1)
         ious = batch_probiou(batch["bboxes"], pred["bboxes"]) if len(labels) and len(detections) else None
-        add_race_stats(self.race_stats, race_match_stats(detections, labels, self.nc, ious=ious))
+        image_stats = race_match_stats(detections, labels, self.nc, ious=ious)
+        add_race_stats(self.race_stats, image_stats)
+        if (
+            self.args.plots
+            and self.miss_visualization_count < 100
+            and image_stats["fn"][self.miss_visualization_classes].sum()
+        ):
+            self.confusion_matrix.plot_matches(
+                batch["img"], batch["im_file"], self.save_dir, self.args.show_labels, self.args.show_conf
+            )
+            self.miss_visualization_count += 1
 
     def postprocess(self, preds: torch.Tensor) -> list[dict[str, torch.Tensor]]:
         """Postprocess OBB predictions.
@@ -156,6 +170,7 @@ class OBBValidator(DetectionValidator):
             "imgsz": imgsz,
             "ratio_pad": ratio_pad,
             "im_file": batch["im_file"][si],
+            "img": batch["img"][si],
         }
 
     def plot_predictions(self, batch: dict[str, Any], preds: list[dict[str, torch.Tensor]], ni: int) -> None:

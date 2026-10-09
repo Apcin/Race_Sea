@@ -118,6 +118,72 @@ class HBSBlock(nn.Module):
         return feature * foreground + smoothed_background * background
 
 
+class DREChannelAttention(nn.Module):
+    """Lightweight channel attention used by the degraded reconstruction enhancer."""
+
+    def __init__(self, channels: int, reduction: int = 16):
+        """Build squeeze-and-excitation channel attention."""
+        super().__init__()
+        hidden = max(channels // reduction, 1)
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.attention = nn.Sequential(
+            nn.Conv2d(channels, hidden, 1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(hidden, channels, 1),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply learned per-channel weights."""
+        return x * self.attention(self.pool(x))
+
+
+class DREHead(nn.Module):
+    """Training-only DRE branch that reconstructs an object-aware degraded RGB image from clean P3 features."""
+
+    def __init__(self, in_channels: int, hidden_channels: int = 128):
+        """Build a compact one-RCAB, 2x sub-pixel reconstruction head."""
+        super().__init__()
+        self.hidden_channels = hidden_channels
+        self.reduce = Conv(in_channels, hidden_channels, 1)
+        self.body = nn.Sequential(
+            Conv(hidden_channels, hidden_channels, 3),
+            nn.Conv2d(hidden_channels, hidden_channels, 3, padding=1),
+            DREChannelAttention(hidden_channels),
+        )
+        self.refine = Conv(hidden_channels, hidden_channels, 3)
+        self.reconstruct = nn.Sequential(
+            nn.Conv2d(hidden_channels, hidden_channels * 4, 3, padding=1),
+            nn.PixelShuffle(2),
+            nn.Conv2d(hidden_channels, 3, 3, padding=1),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Reconstruct a quarter-resolution RGB supervision image from P3."""
+        x = self.reduce(x)
+        x = x + self.body(x)
+        x = x + self.refine(x)
+        return self.reconstruct(x)
+
+    @staticmethod
+    @torch.no_grad()
+    def target(images: torch.Tensor, batch: dict[str, torch.Tensor], size: tuple[int, int]) -> torch.Tensor:
+        """Create selective-degradation targets from the final augmented images and OBB labels."""
+        images = F.interpolate(images.float(), size=size, mode="bilinear", align_corners=False)
+        foreground = HBSBlock.foreground_mask(images, batch).to(images.dtype)
+
+        # Quantized distance bands approximate the paper's spatially varying mean filter efficiently on GPU.
+        blur_near = F.avg_pool2d(images, 3, stride=1, padding=1)
+        blur_middle = F.avg_pool2d(images, 7, stride=1, padding=3)
+        target = F.avg_pool2d(images, 15, stride=1, padding=7)
+        middle_region = F.max_pool2d(foreground, 25, stride=1, padding=12).bool()
+        near_region = F.max_pool2d(foreground, 9, stride=1, padding=4).bool()
+        target = torch.where(middle_region, blur_middle, target)
+        target = torch.where(near_region, blur_near, target)
+        return torch.where(foreground.bool(), images, target)
+
+
 class Detect(nn.Module):
     """YOLO Detect head for object detection models.
 
@@ -226,6 +292,9 @@ class Detect(nn.Module):
         self.hbs_channels = tuple(ch)
         self.hbs_all_levels = False
         self.hbs_kernel_sizes = ()
+        self.dre_enabled = False
+        self.dre_head = None
+        self.dre_channels = 128
 
     def enable_reg_strip(self, kernel_size: int = 19) -> None:
         """Insert a StripBlock after the first local convolution in every bbox regression tower."""
@@ -290,6 +359,22 @@ class Detect(nn.Module):
         else:
             enhanced[0] = self.hbs(enhanced[0], batch)
         return enhanced
+
+    def enable_dre(self, hidden_channels: int = 128) -> None:
+        """Enable the training-only DRE branch on the clean P3 detection feature."""
+        if hidden_channels < 1:
+            raise ValueError(f"DRE hidden channels must be positive, but got {hidden_channels}")
+        if getattr(self, "dre_head", None) is None or getattr(self, "dre_channels", None) != hidden_channels:
+            channels = getattr(self, "hbs_channels", ())
+            if not isinstance(channels, (tuple, list)) or len(channels) != self.nl:
+                channels = tuple(head[0].conv.in_channels for head in self.cv2)
+            self.hbs_channels = tuple(channels)
+            reference = next(self.parameters())
+            self.dre_head = DREHead(self.hbs_channels[0], hidden_channels).to(
+                device=reference.device, dtype=reference.dtype
+            )
+            self.dre_channels = hidden_channels
+        self.dre_enabled = True
 
     @property
     def one2many(self):

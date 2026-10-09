@@ -29,6 +29,9 @@ strip_reg: False # (bool) add a Strip R-CNN-style StripBlock to bbox regression 
 hbs: False # (bool) add training-only hierarchical background smoothing with an auxiliary detection loss
 hbs_all_levels: False # (bool) apply HBS to every detection level using SET stride-adaptive kernels (P3/P4/P5: 3/5/5)
 hbs_gain: 1.0 # (float) HBS auxiliary-loss gain relative to the clean one-to-many loss
+dre: False # (bool) add a training-only degraded reconstruction enhancer on the clean P3 feature
+dre_gain: 0.1 # (float) DRE reconstruction-loss gain
+dre_channels: 128 # (int) hidden channels in the DRE reconstruction head
 verbose: True # (bool) print verbose logs
 seed: 0 # (int) random seed for reproducibility
 deterministic: True # (bool) enable deterministic ops; reproducible but may be slower

@@ -218,6 +218,7 @@ CFG_FLOAT_KEYS = frozenset(
         "workspace",
         "batch",
         "hbs_gain",
+        "dre_gain",
     }
 )
 CFG_FRACTION_KEYS = frozenset(
@@ -263,6 +264,7 @@ CFG_INT_KEYS = frozenset(
         "line_width",
         "nbs",
         "save_period",
+        "dre_channels",
     }
 )
 CFG_INT_MIN = {  # minimum valid values for integer arguments used as divisors, sizes or seeds
@@ -271,6 +273,7 @@ CFG_INT_MIN = {  # minimum valid values for integer arguments used as divisors, 
     "mask_ratio": 1,
     "vid_stride": 1,
     "seed": 0,
+    "dre_channels": 1,
 }
 CFG_BOOL_KEYS = frozenset(
     {  # boolean-only arguments
@@ -310,6 +313,7 @@ CFG_BOOL_KEYS = frozenset(
         "strip_reg",
         "hbs",
         "hbs_all_levels",
+        "dre",
     }
 )
 CFG_STR_KEYS = frozenset({"optimizer", "split", "copy_paste_mode", "auto_augment"})

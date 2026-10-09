@@ -1318,7 +1318,14 @@ class E2ELoss:
             enhanced = self.head.hbs_features(one2many["feats"], batch)
             hbs_preds = self.head.forward_head(enhanced, **self.head.one2many)
             loss = loss + self.one2many.hyp.hbs_gain * self.o2m * self.one2many.loss(hbs_preds, batch)[0]
-        return loss, loss_one2one[1]
+        loss_items = loss_one2one[1]
+        if getattr(self.head, "dre_enabled", False):
+            dre_pred = self.head.dre_head(one2many["feats"][0])
+            dre_target = self.head.dre_head.target(batch["img"], batch, dre_pred.shape[-2:])
+            dre_loss = F.mse_loss(dre_pred.float(), dre_target)
+            loss = loss.sum() + self.one2many.hyp.dre_gain * dre_loss * dre_pred.shape[0]
+            loss_items = {**loss_items, "dre_loss": dre_loss.detach()}
+        return loss, loss_items
 
     def update(self) -> None:
         """Update the weights for one-to-many and one-to-one losses based on the decay schedule."""

@@ -278,6 +278,34 @@ def test_model_profile():
     _ = model.predict(im, profile=True)
 
 
+def test_obb_hbs_dre_loss():
+    """Test that HBS and DRE train jointly while DRE remains outside the inference graph."""
+    from ultralytics.cfg import get_cfg
+    from ultralytics.nn.tasks import OBBModel
+
+    model = OBBModel("yolo26n-obb.yaml", nc=2, verbose=False)
+    model.args = get_cfg(overrides={"hbs_gain": 1.0, "dre_gain": 0.1})
+    model.model[-1].enable_reg_strip()
+    model.model[-1].enable_hbs(all_levels=True)
+    model.model[-1].enable_dre(hidden_channels=16)
+    model.train()
+    batch = {
+        "img": torch.rand(2, 3, 64, 64),
+        "batch_idx": torch.tensor([0, 1]),
+        "cls": torch.tensor([[0.0], [1.0]]),
+        "bboxes": torch.tensor([[0.5, 0.5, 0.25, 0.125, 0.0], [0.4, 0.6, 0.2, 0.15, 0.3]]),
+    }
+    loss, loss_items = model(batch)
+    loss.sum().backward()
+    assert "dre_loss" in loss_items and torch.isfinite(loss_items["dre_loss"])
+    assert any(parameter.grad is not None for parameter in model.model[-1].dre_head.parameters())
+
+    model.eval()
+    with torch.no_grad():
+        prediction = model(batch["img"])
+    assert prediction is not None
+
+
 def test_predict_txt(tmp_path):
     """Test YOLO predictions with file, directory, and pattern sources listed in a text file."""
     file = tmp_path / "sources_multi_row.txt"

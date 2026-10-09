@@ -71,10 +71,14 @@ class OBBTrainer(yolo.detect.DetectionTrainer):
         source_has_strip = bool(getattr(source_head, "strip_reg", False))
         source_has_hbs = bool(getattr(source_head, "hbs_enabled", False))
         source_hbs_all_levels = bool(getattr(source_head, "hbs_all_levels", False))
+        source_has_dre = bool(getattr(source_head, "dre_enabled", False))
+        source_dre_channels = int(getattr(source_head, "dre_channels", self.args.dre_channels))
         if source_has_strip:
             model.model[-1].enable_reg_strip()
         if source_has_hbs:
             model.model[-1].enable_hbs(all_levels=source_hbs_all_levels)
+        if source_has_dre:
+            model.model[-1].enable_dre(source_dre_channels)
         if weights:
             model.load(weights)
         if self.args.strip_reg and not source_has_strip:
@@ -84,6 +88,11 @@ class OBBTrainer(yolo.detect.DetectionTrainer):
         elif not self.args.hbs and source_has_hbs:
             model.model[-1].hbs_enabled = False
             model.model[-1].hbs = None
+        if self.args.dre and (not source_has_dre or source_dre_channels != self.args.dre_channels):
+            model.model[-1].enable_dre(self.args.dre_channels)
+        elif not self.args.dre and source_has_dre:
+            model.model[-1].dre_enabled = False
+            model.model[-1].dre_head = None
         if self.args.strip_reg:
             LOGGER.info("Strip regression enabled for the OBB regression towers.")
         if self.args.hbs:
@@ -92,6 +101,11 @@ class OBBTrainer(yolo.detect.DetectionTrainer):
             LOGGER.info(
                 f"HBS enabled for OBB: training-only background smoothing on {levels} with kernels "
                 f"{head.hbs_kernel_sizes} and an auxiliary one-to-many loss."
+            )
+        if self.args.dre:
+            LOGGER.info(
+                f"DRE enabled for OBB: clean P3 -> {model.model[-1].dre_channels} channels -> "
+                f"2x degraded RGB reconstruction with gain {self.args.dre_gain}."
             )
 
         return model

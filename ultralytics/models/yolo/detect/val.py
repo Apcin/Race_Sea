@@ -19,9 +19,8 @@ from ultralytics.utils.checks import check_requirements
 from ultralytics.utils.metrics import ConfusionMatrix, DetMetrics, box_iou
 from ultralytics.utils.plotting import plot_images
 
-
 RACE_GROUPS = {
-    "ship": range(0, 4),
+    "ship": range(4),
     "aircraft": range(4, 24),
     "vehicle": range(24, 25),
 }
@@ -595,8 +594,7 @@ class DetectionValidator(BaseValidator):
                 f.write("%s,%i,%i,%i,%i,%.10f,%.10f,%i\n" % row)
         with open(self.save_dir / "race_metrics_by_class.csv", "w", encoding="utf-8") as f:
             f.write(
-                "class_id,class_name,tp,fp,fn,gt,recall,fdr,"
-                "fp_wrong_class,fp_duplicate,fp_background_or_iou,pred\n"
+                "class_id,class_name,tp,fp,fn,gt,recall,fdr,fp_wrong_class,fp_duplicate,fp_background_or_iou,pred\n"
             )
             for row in class_rows:
                 f.write("%i,%s,%i,%i,%i,%i,%.10f,%.10f,%i,%i,%i,%i\n" % row)
